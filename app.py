@@ -4,6 +4,7 @@ import asyncio
 import threading
 import time
 import psutil
+import glob
 from datetime import datetime, timedelta
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -26,7 +27,7 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 OWNER_ID = 6804892450
 LOG_CHANNEL_ID = -1003453546878
 
-MONGO_URI = "mongodb+srv://sk5400552:shjjkytdcghhudd@cluster0g.kbllv.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0g"
+MONGO_URI = os.getenv("MONGO_URI")
 
 FORCE_CHAT_IDS = [-1003559174618, -1003317410802]
 
@@ -38,6 +39,7 @@ JOIN_LINKS = [
 BOT_START_TIME = datetime.now()
 LAST_SAMPLE = {"cpu": 0.0, "ram": 0.0, "ram_used": 0, "ram_total": 0}
 HIGH_CPU_COUNT = 0
+HIGH_RAM_COUNT = 0
 
 # ---------------- MongoDB ----------------
 
@@ -60,45 +62,37 @@ def start_loop(loop):
 
 threading.Thread(target=start_loop, args=(main_loop,), daemon=True).start()
 
-# ---------------- Background Samplers ----------------
+# ---------------- Helpers ----------------
 
-def resource_sampler():
-    global HIGH_CPU_COUNT
-    while True:
+def format_uptime():
+    delta: timedelta = datetime.now() - BOT_START_TIME
+    d = delta.days
+    h, rem = divmod(delta.seconds, 3600)
+    m, s = divmod(rem, 60)
+    return f"{d}d {h}h {m}m {s}s"
+
+
+def get_disk_usage():
+    try:
+        usage = psutil.disk_usage("/")
+        used = usage.used // (1024 * 1024)
+        total = usage.total // (1024 * 1024)
+        percent = usage.percent
+        return used, total, percent
+    except:
+        return 0, 0, 0
+
+
+def cleanup_temp_files():
+    deleted = 0
+    for f in glob.glob("lookup_*.txt"):
         try:
-            cpu = psutil.cpu_percent(interval=1)
-            mem = psutil.virtual_memory()
-
-            LAST_SAMPLE["cpu"] = cpu
-            LAST_SAMPLE["ram"] = mem.percent
-            LAST_SAMPLE["ram_used"] = mem.used // (1024 * 1024)
-            LAST_SAMPLE["ram_total"] = mem.total // (1024 * 1024)
-
-            if cpu > 80:
-                HIGH_CPU_COUNT += 1
-            else:
-                HIGH_CPU_COUNT = 0
-
-            if HIGH_CPU_COUNT >= 3:
-                text = f"🚨 High CPU Alert\nCPU: {cpu:.1f}%"
-                logs_col.insert_one({"text": text, "time": datetime.now()})
-                try:
-                    asyncio.run_coroutine_threadsafe(
-                        tg_app.bot.send_message(LOG_CHANNEL_ID, text),
-                        main_loop
-                    )
-                except:
-                    pass
-                HIGH_CPU_COUNT = 0
-
+            os.remove(f)
+            deleted += 1
         except:
             pass
+    return deleted
 
-        time.sleep(5)
-
-threading.Thread(target=resource_sampler, daemon=True).start()
-
-# ---------------- Helpers ----------------
 
 async def log_event(text: str):
     logs_col.insert_one({"text": text, "time": datetime.now()})
@@ -128,17 +122,68 @@ def inc_lookup():
         upsert=True
     )
 
+# ---------------- Background Sampler ----------------
 
-def is_owner(uid: int):
-    return uid == OWNER_ID
+def resource_sampler():
+    global HIGH_CPU_COUNT, HIGH_RAM_COUNT
+    while True:
+        try:
+            cpu = psutil.cpu_percent(interval=1)
+            mem = psutil.virtual_memory()
 
+            LAST_SAMPLE["cpu"] = cpu
+            LAST_SAMPLE["ram"] = mem.percent
+            LAST_SAMPLE["ram_used"] = mem.used // (1024 * 1024)
+            LAST_SAMPLE["ram_total"] = mem.total // (1024 * 1024)
 
-def format_uptime():
-    delta: timedelta = datetime.now() - BOT_START_TIME
-    d = delta.days
-    h, rem = divmod(delta.seconds, 3600)
-    m, s = divmod(rem, 60)
-    return f"{d}d {h}h {m}m {s}s"
+            # ---- CPU Alert ----
+            if cpu > 80:
+                HIGH_CPU_COUNT += 1
+            else:
+                HIGH_CPU_COUNT = 0
+
+            if HIGH_CPU_COUNT >= 3:
+                text = f"🚨 High CPU Alert\nCPU: {cpu:.1f}%"
+                logs_col.insert_one({"text": text, "time": datetime.now()})
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        tg_app.bot.send_message(LOG_CHANNEL_ID, text),
+                        main_loop
+                    )
+                except:
+                    pass
+                HIGH_CPU_COUNT = 0
+
+            # ---- RAM Alert + Cleanup ----
+            if mem.percent > 70:
+                HIGH_RAM_COUNT += 1
+            else:
+                HIGH_RAM_COUNT = 0
+
+            if HIGH_RAM_COUNT >= 3:
+                deleted = cleanup_temp_files()
+                text = (
+                    f"🚨 High RAM Alert\n"
+                    f"RAM: {mem.percent:.1f}%\n"
+                    f"🧹 Auto-cleanup ran\n"
+                    f"Files deleted: {deleted}"
+                )
+                logs_col.insert_one({"text": text, "time": datetime.now()})
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        tg_app.bot.send_message(LOG_CHANNEL_ID, text),
+                        main_loop
+                    )
+                except:
+                    pass
+                HIGH_RAM_COUNT = 0
+
+        except:
+            pass
+
+        time.sleep(5)
+
+threading.Thread(target=resource_sampler, daemon=True).start()
 
 # ---------------- Forced Join Logic ----------------
 
@@ -236,7 +281,12 @@ async def lookup_one(update: Update, context: ContextTypes.DEFAULT_TYPE, mobile:
     with open(filename, "rb") as f:
         await update.message.reply_document(f, filename=filename)
 
-    os.remove(filename)
+    await asyncio.sleep(60)
+
+    try:
+        os.remove(filename)
+    except:
+        pass
 
 
 async def do_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE, mobiles: list):
@@ -262,13 +312,16 @@ async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     latency = (time.time() - start) * 1000
 
     s = LAST_SAMPLE
+    disk_used, disk_total, disk_percent = get_disk_usage()
+
     text = (
         "🏓 Pong!\n\n"
         f"⏱ Latency: {latency:.1f} ms\n"
         f"🕒 Uptime: {format_uptime()}\n"
         f"🧠 CPU: {s['cpu']:.1f}%\n"
         f"💾 RAM: {s['ram']:.1f}%\n"
-        f"📦 Memory: {s['ram_used']}MB / {s['ram_total']}MB"
+        f"📦 Memory: {s['ram_used']}MB / {s['ram_total']}MB\n"
+        f"💽 Storage: {disk_used}MB / {disk_total}MB ({disk_percent:.1f}%)"
     )
 
     await msg.edit_text(text)
@@ -293,12 +346,41 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(text)
 
+
+async def total_users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ Not authorized.")
+        return
+
+    total = users_col.count_documents({})
+    await update.message.reply_text(f"👥 Total Users: {total}")
+
+
+async def show_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ Not authorized to use /logs.")
+        return
+
+    logs = logs_col.find().sort("time", -1).limit(10)
+    text = "🧾 Last 10 Logs:\n\n"
+
+    for l in logs:
+        t = l["time"].strftime("%Y-%m-%d %H:%M:%S")
+        text += f"[{t}]\n{l['text']}\n\n"
+
+    if not text.strip():
+        text = "ℹ️ No logs found yet."
+
+    await update.message.reply_text(text[:4000])
+
 # ---------------- Register Handlers ----------------
 
 tg_app.add_handler(CommandHandler("start", start))
 tg_app.add_handler(CommandHandler("num", getnumber))
 tg_app.add_handler(CommandHandler("ping", ping))
 tg_app.add_handler(CommandHandler("stats", stats))
+tg_app.add_handler(CommandHandler("total", total_users_cmd))
+tg_app.add_handler(CommandHandler("logs", show_logs))
 tg_app.add_handler(CallbackQueryHandler(check_join_callback, pattern="check_join"))
 
 # ---------------- Webhook ----------------
@@ -322,7 +404,7 @@ async def startup():
     await tg_app.start()
     await tg_app.bot.set_webhook(WEBHOOK_URL)
 
-    await log_event("🤖 Bot Restarted / Started")
+    await log_event("🤖 Bot Started / Restarted")
 
     print("✅ Webhook set:", WEBHOOK_URL)
 
