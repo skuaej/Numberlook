@@ -92,7 +92,7 @@ async def check_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             "✅ Verified!\n\n"
             "Now use:\n"
             "/getnumber 8797879802\n"
-            "@eyelookup 8797879802"
+            "@eyelookup_bot 8797879802"
         )
     else:
         await query.answer(
@@ -114,7 +114,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👋 Welcome!\n\n"
         "Use:\n"
         "/num 8797879802\n"
-        "@eyelookup 8797879802"
+        "@eyelookup_bot 8797879802"
     )
 
 
@@ -173,14 +173,14 @@ async def lookup_one(update: Update, context: ContextTypes.DEFAULT_TYPE, mobile:
         file_msg = await update.message.reply_document(
             document=f,
             filename=filename,
-            caption="📄 Mobile lookup result for your request"
+            caption="📄 this is result for your request"
         )
 
     warn_msg = await update.message.reply_text(
-        "⚠️ Save or forward this details.\nThis file will be deleted in 30 seconds."
+        "⚠️ Save or forward this details.\nThis file will be deleted in 60 seconds."
     )
 
-    await asyncio.sleep(30)
+    await asyncio.sleep(60)
 
     try:
         await context.bot.delete_message(update.effective_chat.id, file_msg.message_id)
