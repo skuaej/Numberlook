@@ -113,7 +113,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Welcome!\n\n"
         "Use:\n"
-        "/getnumber 8797879802\n"
+        "/num 8797879802\n"
         "@eyelookup 8797879802"
     )
 
@@ -224,10 +224,10 @@ async def mention_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------- Register Handlers ----------------
 
 tg_app.add_handler(CommandHandler("start", start))
-tg_app.add_handler(CommandHandler("getnumber", getnumber))
+tg_app.add_handler(CommandHandler("num", getnumber))
 tg_app.add_handler(CallbackQueryHandler(check_join_callback, pattern="check_join"))
 tg_app.add_handler(
-    MessageHandler(filters.TEXT & filters.Regex(r"@eyelookup"), mention_lookup)
+    MessageHandler(filters.TEXT & filters.Regex(r"@eyelookup_bot"), mention_lookup)
 )
 
 # ---------------- Webhook ----------------
