@@ -1,6 +1,7 @@
 import requests
 import os
 import asyncio
+import threading
 from datetime import datetime
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -34,9 +35,14 @@ JOIN_LINKS = [
 flask_app = Flask(__name__)
 tg_app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# ---- Global asyncio loop for PTB ----
+# ---- Global asyncio loop running in background thread ----
 main_loop = asyncio.new_event_loop()
-asyncio.set_event_loop(main_loop)
+
+def start_loop(loop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+threading.Thread(target=start_loop, args=(main_loop,), daemon=True).start()
 
 # ---------------- Forced Join Logic ----------------
 
@@ -245,7 +251,7 @@ async def startup():
     await tg_app.bot.set_webhook(WEBHOOK_URL)
     print("✅ Webhook set:", WEBHOOK_URL)
 
-main_loop.create_task(startup())
+asyncio.run_coroutine_threadsafe(startup(), main_loop)
 
 if __name__ == "__main__":
-    flask_app.run(host="0.0.0.0", port=PORT)
+    flask_app.run(host="0.0.0.0", port=PORT).
