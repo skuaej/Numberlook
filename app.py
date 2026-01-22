@@ -3,9 +3,7 @@ import os
 import asyncio
 from datetime import datetime
 from flask import Flask, request
-from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ContextTypes,
     CallbackQueryHandler, MessageHandler, filters
@@ -121,9 +119,7 @@ async def lookup_one(update: Update, context: ContextTypes.DEFAULT_TYPE, mobile:
     data = r.json()
 
     if not data.get("success"):
-        await update.message.reply_text(
-            f"⚠️ API Error for {mobile}"
-        )
+        await update.message.reply_text(f"⚠️ API Error for {mobile}")
         return
 
     results = data.get("result", [])
@@ -228,8 +224,13 @@ tg_app.add_handler(
 
 @flask_app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
-    update = Update.de_json(request.get_json(force=True), tg_app.bot)
-    tg_app.update_queue.put_nowait(update)
+    data = request.get_json(force=True)
+
+    async def handle():
+        update = Update.de_json(data, tg_app.bot)
+        await tg_app.process_update(update)
+
+    asyncio.get_event_loop().create_task(handle())
     return "ok"
 
 # ---------------- Startup ----------------
