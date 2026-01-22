@@ -28,10 +28,7 @@ LOG_CHANNEL_ID = -1003453546878
 
 MONGO_URI = "mongodb+srv://sk5400552:shjjkytdcghhudd@cluster0g.kbllv.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0g"
 
-FORCE_CHAT_IDS = [
-    -1003559174618,
-    -1003317410802,
-]
+FORCE_CHAT_IDS = [-1003559174618, -1003317410802]
 
 JOIN_LINKS = [
     "https://t.me/+BkMdZGT0ryBkMThl",
@@ -39,7 +36,8 @@ JOIN_LINKS = [
 ]
 
 BOT_START_TIME = datetime.now()
-LAST_CPU_SAMPLE = {"cpu": 0.0, "ram": 0.0}
+LAST_SAMPLE = {"cpu": 0.0, "ram": 0.0, "ram_used": 0, "ram_total": 0}
+HIGH_CPU_COUNT = 0
 
 # ---------------- MongoDB ----------------
 
@@ -47,6 +45,7 @@ mongo_client = MongoClient(MONGO_URI)
 db = mongo_client["eyelookup_bot"]
 users_col = db["users"]
 logs_col = db["logs"]
+stats_col = db["stats"]
 
 # ---------------- INIT ----------------
 
@@ -61,27 +60,48 @@ def start_loop(loop):
 
 threading.Thread(target=start_loop, args=(main_loop,), daemon=True).start()
 
-# ---------------- Background CPU Sampler ----------------
+# ---------------- Background Samplers ----------------
 
-def cpu_sampler():
+def resource_sampler():
+    global HIGH_CPU_COUNT
     while True:
         try:
-            LAST_CPU_SAMPLE["cpu"] = psutil.cpu_percent(interval=1)
+            cpu = psutil.cpu_percent(interval=1)
             mem = psutil.virtual_memory()
-            LAST_CPU_SAMPLE["ram"] = mem.percent
+
+            LAST_SAMPLE["cpu"] = cpu
+            LAST_SAMPLE["ram"] = mem.percent
+            LAST_SAMPLE["ram_used"] = mem.used // (1024 * 1024)
+            LAST_SAMPLE["ram_total"] = mem.total // (1024 * 1024)
+
+            if cpu > 80:
+                HIGH_CPU_COUNT += 1
+            else:
+                HIGH_CPU_COUNT = 0
+
+            if HIGH_CPU_COUNT >= 3:
+                text = f"🚨 High CPU Alert\nCPU: {cpu:.1f}%"
+                logs_col.insert_one({"text": text, "time": datetime.now()})
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        tg_app.bot.send_message(LOG_CHANNEL_ID, text),
+                        main_loop
+                    )
+                except:
+                    pass
+                HIGH_CPU_COUNT = 0
+
         except:
             pass
+
         time.sleep(5)
 
-threading.Thread(target=cpu_sampler, daemon=True).start()
+threading.Thread(target=resource_sampler, daemon=True).start()
 
 # ---------------- Helpers ----------------
 
 async def log_event(text: str):
-    logs_col.insert_one({
-        "text": text,
-        "time": datetime.now()
-    })
+    logs_col.insert_one({"text": text, "time": datetime.now()})
     try:
         await tg_app.bot.send_message(LOG_CHANNEL_ID, text)
     except:
@@ -100,18 +120,25 @@ def save_user(user):
     )
 
 
-def is_owner(user_id: int):
-    return user_id == OWNER_ID
+def inc_lookup():
+    today = datetime.now().strftime("%Y-%m-%d")
+    stats_col.update_one(
+        {"date": today},
+        {"$inc": {"lookups": 1}},
+        upsert=True
+    )
+
+
+def is_owner(uid: int):
+    return uid == OWNER_ID
 
 
 def format_uptime():
     delta: timedelta = datetime.now() - BOT_START_TIME
-    days = delta.days
-    hours, rem = divmod(delta.seconds, 3600)
-    minutes, seconds = divmod(rem, 60)
-
-    return f"{days}d {hours}h {minutes}m {seconds}s"
-
+    d = delta.days
+    h, rem = divmod(delta.seconds, 3600)
+    m, s = divmod(rem, 60)
+    return f"{d}d {h}h {m}m {s}s"
 
 # ---------------- Forced Join Logic ----------------
 
@@ -142,29 +169,18 @@ async def force_join_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
     if update.message:
-        await update.message.reply_text(
-            text, parse_mode="Markdown", reply_markup=join_keyboard()
-        )
+        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=join_keyboard())
     else:
-        await update.callback_query.message.edit_text(
-            text, parse_mode="Markdown", reply_markup=join_keyboard()
-        )
+        await update.callback_query.message.edit_text(text, parse_mode="Markdown", reply_markup=join_keyboard())
 
 
 async def check_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-
-    if await is_user_joined(user_id, context):
-        await query.message.edit_text(
-            "✅ Verified!\n\nNow use:\n/num 8797879802"
-        )
+    q = update.callback_query
+    await q.answer()
+    if await is_user_joined(q.from_user.id, context):
+        await q.message.edit_text("✅ Verified!\n\nUse:\n/num 8797879802")
     else:
-        await query.answer(
-            "❌ Still not verified.\nJoin both channels & try again.",
-            show_alert=True
-        )
+        await q.answer("❌ Join both channels & try again.", show_alert=True)
 
 # ---------------- Commands ----------------
 
@@ -173,22 +189,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_user(user)
 
     await log_event(
-        f"👤 New Start\n"
-        f"ID: {user.id}\n"
-        f"Name: {user.first_name}\n"
-        f"Username: @{user.username}"
+        f"👤 New Start\nID: {user.id}\nName: {user.first_name}\nUsername: @{user.username}"
     )
 
     if not await is_user_joined(user.id, context):
         await force_join_message(update, context)
         return
 
-    await update.message.reply_text(
-        "👋 Welcome!\n\nUse:\n/num 8797879802"
-    )
+    await update.message.reply_text("👋 Welcome!\n\nUse:\n/num 8797879802")
 
 
 async def lookup_one(update: Update, context: ContextTypes.DEFAULT_TYPE, mobile: str):
+    inc_lookup()
+
     if not mobile.isdigit() or not (8 <= len(mobile) <= 13):
         await update.message.reply_text(f"❌ Invalid number: {mobile}")
         return
@@ -206,24 +219,14 @@ async def lookup_one(update: Update, context: ContextTypes.DEFAULT_TYPE, mobile:
         await update.message.reply_text(f"❌ No data found for {mobile}")
         return
 
-    lines = [
-        "📱 Mobile Lookup Result",
-        f"🔍 Searched Number: {mobile}",
-        f"🕒 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        "=" * 50
-    ]
+    lines = ["📱 Mobile Lookup Result", f"🔍 Searched Number: {mobile}", "=" * 50]
 
     for i, info in enumerate(results, 1):
         lines += [
             f"\n📌 Record {i}",
-            f"Name        : {info.get('name','N/A')}",
-            f"Father Name: {info.get('father_name','N/A')}",
-            f"Mobile      : {info.get('mobile','N/A')}",
-            f"Alt Mobile  : {info.get('alt_mobile','N/A')}",
-            f"Circle      : {info.get('circle','N/A')}",
-            f"Email       : {info.get('email','N/A')}",
-            f"Address     : {info.get('address','N/A')}",
-            "-" * 50
+            f"Name: {info.get('name','N/A')}",
+            f"Mobile: {info.get('mobile','N/A')}",
+            "-" * 40
         ]
 
     filename = f"lookup_{mobile}.txt"
@@ -231,28 +234,9 @@ async def lookup_one(update: Update, context: ContextTypes.DEFAULT_TYPE, mobile:
         f.write("\n".join(lines))
 
     with open(filename, "rb") as f:
-        file_msg = await update.message.reply_document(
-            document=f,
-            filename=filename,
-            caption="📄 This is the result for your request"
-        )
+        await update.message.reply_document(f, filename=filename)
 
-    warn_msg = await update.message.reply_text(
-        "⚠️ Save this file.\nDeleted in 60 seconds."
-    )
-
-    await asyncio.sleep(60)
-
-    try:
-        await context.bot.delete_message(update.effective_chat.id, file_msg.message_id)
-        await context.bot.delete_message(update.effective_chat.id, warn_msg.message_id)
-    except:
-        pass
-
-    try:
-        os.remove(filename)
-    except:
-        pass
+    os.remove(filename)
 
 
 async def do_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE, mobiles: list):
@@ -260,68 +244,61 @@ async def do_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE, mobiles:
         await force_join_message(update, context)
         return
 
-    for mobile in mobiles:
-        await lookup_one(update, context, mobile)
+    for m in mobiles:
+        await lookup_one(update, context, m)
 
 
 async def getnumber(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("❌ Usage:\n/num 8797879802")
         return
-
     await do_lookup(update, context, context.args)
 
-
-# -------- Owner / Utility Commands --------
-
-async def total_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_owner(update.effective_user.id):
-        return
-
-    total = users_col.count_documents({})
-    await update.message.reply_text(f"👥 Total Users: {total}")
-
-
-async def show_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_owner(update.effective_user.id):
-        return
-
-    logs = logs_col.find().sort("time", -1).limit(10)
-    text = "🧾 Last 10 Logs:\n\n"
-
-    for l in logs:
-        t = l["time"].strftime("%Y-%m-%d %H:%M:%S")
-        text += f"[{t}]\n{l['text']}\n\n"
-
-    await update.message.reply_text(text[:4000])
-
+# -------- Utility Commands --------
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     start = time.time()
     msg = await update.message.reply_text("🏓 Pinging...")
     latency = (time.time() - start) * 1000
 
-    uptime = format_uptime()
-    cpu = LAST_CPU_SAMPLE["cpu"]
-    ram = LAST_CPU_SAMPLE["ram"]
-
+    s = LAST_SAMPLE
     text = (
-        "🏓 *Pong!*\n\n"
-        f"⏱ Latency: `{latency:.2f} ms`\n"
-        f"🕒 Uptime: `{uptime}`\n"
-        f"🧠 CPU: `{cpu:.1f}%`\n"
-        f"💾 RAM: `{ram:.1f}%`"
+        "🏓 Pong!\n\n"
+        f"⏱ Latency: {latency:.1f} ms\n"
+        f"🕒 Uptime: {format_uptime()}\n"
+        f"🧠 CPU: {s['cpu']:.1f}%\n"
+        f"💾 RAM: {s['ram']:.1f}%\n"
+        f"📦 Memory: {s['ram_used']}MB / {s['ram_total']}MB"
     )
 
-    await msg.edit_text(text, parse_mode="Markdown")
+    await msg.edit_text(text)
+
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    total_users = users_col.count_documents({})
+    today_users = users_col.count_documents({
+        "time": {"$gte": datetime.now().replace(hour=0, minute=0, second=0)}
+    })
+
+    s = stats_col.find_one({"date": today}) or {"lookups": 0}
+
+    text = (
+        "📊 Bot Stats\n\n"
+        f"👥 Total Users: {total_users}\n"
+        f"🆕 Users Today: {today_users}\n"
+        f"🔍 Lookups Today: {s.get('lookups', 0)}"
+    )
+
+    await update.message.reply_text(text)
 
 # ---------------- Register Handlers ----------------
 
 tg_app.add_handler(CommandHandler("start", start))
 tg_app.add_handler(CommandHandler("num", getnumber))
-tg_app.add_handler(CommandHandler("total", total_users))
-tg_app.add_handler(CommandHandler("logs", show_logs))
 tg_app.add_handler(CommandHandler("ping", ping))
+tg_app.add_handler(CommandHandler("stats", stats))
 tg_app.add_handler(CallbackQueryHandler(check_join_callback, pattern="check_join"))
 
 # ---------------- Webhook ----------------
@@ -345,7 +322,7 @@ async def startup():
     await tg_app.start()
     await tg_app.bot.set_webhook(WEBHOOK_URL)
 
-    await log_event("🤖 Bot Started Successfully")
+    await log_event("🤖 Bot Restarted / Started")
 
     print("✅ Webhook set:", WEBHOOK_URL)
 
