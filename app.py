@@ -1,0 +1,305 @@
+import requests
+import os
+import asyncio
+import threading
+from datetime import datetime
+from flask import Flask, request
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, ContextTypes,
+    CallbackQueryHandler
+)
+from pymongo import MongoClient
+
+# ---------------- CONFIG ----------------
+
+API_KEY = "jakiez"
+BASE_URL = "https://giga-seven.vercel.app/api"
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+PORT = int(os.getenv("PORT", 8000))
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+
+OWNER_ID = 6804892450
+LOG_CHANNEL_ID = -1003453546878
+
+MONGO_URI = "mongodb+srv://sk5400552:shjjkytdcghhudd@cluster0g.kbllv.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0g"
+
+FORCE_CHAT_IDS = [
+    -1003559174618,
+    -1003317410802,
+]
+
+JOIN_LINKS = [
+    "https://t.me/+BkMdZGT0ryBkMThl",
+    "https://t.me/+HidgJvH0BktiZmI9"
+]
+
+# ---------------- MongoDB ----------------
+
+mongo_client = MongoClient(MONGO_URI)
+db = mongo_client["eyelookup_bot"]
+users_col = db["users"]
+logs_col = db["logs"]
+
+# ---------------- INIT ----------------
+
+flask_app = Flask(__name__)
+tg_app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+main_loop = asyncio.new_event_loop()
+
+def start_loop(loop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+threading.Thread(target=start_loop, args=(main_loop,), daemon=True).start()
+
+# ---------------- Helpers ----------------
+
+async def log_event(text: str):
+    logs_col.insert_one({
+        "text": text,
+        "time": datetime.now()
+    })
+    try:
+        await tg_app.bot.send_message(LOG_CHANNEL_ID, text)
+    except:
+        pass
+
+
+def save_user(user):
+    if not users_col.find_one({"user_id": user.id}):
+        users_col.insert_one({
+            "user_id": user.id,
+            "username": user.username,
+            "first_name": user.first_name,
+            "time": datetime.now()
+        })
+
+
+async def is_owner(user_id: int):
+    return user_id == OWNER_ID
+
+
+# ---------------- Forced Join Logic ----------------
+
+async def is_user_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    for chat_id in FORCE_CHAT_IDS:
+        try:
+            member = await context.bot.get_chat_member(chat_id, user_id)
+            if member.status in ("left", "kicked"):
+                return False
+        except:
+            return False
+    return True
+
+
+def join_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔗 Join Channel 1", url=JOIN_LINKS[0])],
+        [InlineKeyboardButton("🔗 Join Channel 2", url=JOIN_LINKS[1])],
+        [InlineKeyboardButton("✅ I Joined", callback_data="check_join")]
+    ])
+
+
+async def force_join_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🚫 *Access Denied*\n\n"
+        "You must join all channels to use this bot.\n\n"
+        "After joining both channels, press *I Joined*."
+    )
+
+    if update.message:
+        await update.message.reply_text(
+            text, parse_mode="Markdown", reply_markup=join_keyboard()
+        )
+    else:
+        await update.callback_query.message.edit_text(
+            text, parse_mode="Markdown", reply_markup=join_keyboard()
+        )
+
+
+async def check_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    if await is_user_joined(user_id, context):
+        await query.message.edit_text(
+            "✅ Verified!\n\nNow use:\n/num 8797879802"
+        )
+    else:
+        await query.answer(
+            "❌ Still not verified.\nJoin both channels & try again.",
+            show_alert=True
+        )
+
+# ---------------- Commands ----------------
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    save_user(user)
+
+    await log_event(
+        f"👤 New Start\n"
+        f"ID: {user.id}\n"
+        f"Name: {user.first_name}\n"
+        f"Username: @{user.username}"
+    )
+
+    if not await is_user_joined(user.id, context):
+        await force_join_message(update, context)
+        return
+
+    await update.message.reply_text(
+        "👋 Welcome!\n\nUse:\n/num 8797879802"
+    )
+
+
+async def lookup_one(update: Update, context: ContextTypes.DEFAULT_TYPE, mobile: str):
+    if not mobile.isdigit() or not (8 <= len(mobile) <= 13):
+        await update.message.reply_text(f"❌ Invalid number: {mobile}")
+        return
+
+    url = f"{BASE_URL}?key={API_KEY}&num={mobile}"
+    r = requests.get(url, timeout=20)
+    data = r.json()
+
+    if not data.get("success"):
+        await update.message.reply_text(f"⚠️ API Error for {mobile}")
+        return
+
+    results = data.get("result", [])
+    if not results:
+        await update.message.reply_text(f"❌ No data found for {mobile}")
+        return
+
+    lines = [
+        "📱 Mobile Lookup Result",
+        f"🔍 Searched Number: {mobile}",
+        f"🕒 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "=" * 50
+    ]
+
+    for i, info in enumerate(results, 1):
+        lines += [
+            f"\n📌 Record {i}",
+            f"Name        : {info.get('name','N/A')}",
+            f"Father Name: {info.get('father_name','N/A')}",
+            f"Mobile      : {info.get('mobile','N/A')}",
+            f"Alt Mobile  : {info.get('alt_mobile','N/A')}",
+            f"Circle      : {info.get('circle','N/A')}",
+            f"Email       : {info.get('email','N/A')}",
+            f"Address     : {info.get('address','N/A')}",
+            "-" * 50
+        ]
+
+    filename = f"lookup_{mobile}.txt"
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+    with open(filename, "rb") as f:
+        file_msg = await update.message.reply_document(
+            document=f,
+            filename=filename,
+            caption="📄 This is the result for your request"
+        )
+
+    warn_msg = await update.message.reply_text(
+        "⚠️ Save this file.\nDeleted in 60 seconds."
+    )
+
+    await asyncio.sleep(60)
+
+    try:
+        await context.bot.delete_message(update.effective_chat.id, file_msg.message_id)
+        await context.bot.delete_message(update.effective_chat.id, warn_msg.message_id)
+    except:
+        pass
+
+    try:
+        os.remove(filename)
+    except:
+        pass
+
+
+async def do_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE, mobiles: list):
+    if not await is_user_joined(update.effective_user.id, context):
+        await force_join_message(update, context)
+        return
+
+    for mobile in mobiles:
+        await lookup_one(update, context, mobile)
+
+
+async def getnumber(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❌ Usage:\n/num 8797879802")
+        return
+
+    await do_lookup(update, context, context.args)
+
+
+# -------- Owner Commands --------
+
+async def total_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_owner(update.effective_user.id):
+        return
+
+    total = users_col.count_documents({})
+    await update.message.reply_text(f"👥 Total Users: {total}")
+
+
+async def show_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await is_owner(update.effective_user.id):
+        return
+
+    logs = logs_col.find().sort("time", -1).limit(10)
+    text = "🧾 Last 10 Logs:\n\n"
+
+    for l in logs:
+        t = l["time"].strftime("%Y-%m-%d %H:%M:%S")
+        text += f"[{t}]\n{l['text']}\n\n"
+
+    await update.message.reply_text(text[:4000])
+
+
+# ---------------- Register Handlers ----------------
+
+tg_app.add_handler(CommandHandler("start", start))
+tg_app.add_handler(CommandHandler("num", getnumber))
+tg_app.add_handler(CommandHandler("total", total_users))
+tg_app.add_handler(CommandHandler("logs", show_logs))
+tg_app.add_handler(CallbackQueryHandler(check_join_callback, pattern="check_join"))
+
+# ---------------- Webhook ----------------
+
+@flask_app.route(WEBHOOK_PATH, methods=["POST"])
+def webhook():
+    data = request.get_json(force=True)
+    update = Update.de_json(data, tg_app.bot)
+
+    asyncio.run_coroutine_threadsafe(
+        tg_app.process_update(update),
+        main_loop
+    )
+
+    return "ok"
+
+# ---------------- Startup ----------------
+
+async def startup():
+    await tg_app.initialize()
+    await tg_app.start()
+    await tg_app.bot.set_webhook(WEBHOOK_URL)
+
+    await log_event("🤖 Bot Started Successfully")
+
+    print("✅ Webhook set:", WEBHOOK_URL)
+
+asyncio.run_coroutine_threadsafe(startup(), main_loop)
+
+if __name__ == "__main__":
+    flask_app.run(host="0.0.0.0", port=PORT)
