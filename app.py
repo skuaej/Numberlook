@@ -2,7 +2,9 @@ import requests
 import os
 import asyncio
 import threading
-from datetime import datetime
+import time
+import psutil
+from datetime import datetime, timedelta
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -36,6 +38,9 @@ JOIN_LINKS = [
     "https://t.me/+HidgJvH0BktiZmI9"
 ]
 
+BOT_START_TIME = datetime.now()
+LAST_CPU_SAMPLE = {"cpu": 0.0, "ram": 0.0}
+
 # ---------------- MongoDB ----------------
 
 mongo_client = MongoClient(MONGO_URI)
@@ -56,6 +61,20 @@ def start_loop(loop):
 
 threading.Thread(target=start_loop, args=(main_loop,), daemon=True).start()
 
+# ---------------- Background CPU Sampler ----------------
+
+def cpu_sampler():
+    while True:
+        try:
+            LAST_CPU_SAMPLE["cpu"] = psutil.cpu_percent(interval=1)
+            mem = psutil.virtual_memory()
+            LAST_CPU_SAMPLE["ram"] = mem.percent
+        except:
+            pass
+        time.sleep(5)
+
+threading.Thread(target=cpu_sampler, daemon=True).start()
+
 # ---------------- Helpers ----------------
 
 async def log_event(text: str):
@@ -70,17 +89,28 @@ async def log_event(text: str):
 
 
 def save_user(user):
-    if not users_col.find_one({"user_id": user.id}):
-        users_col.insert_one({
-            "user_id": user.id,
+    users_col.update_one(
+        {"user_id": user.id},
+        {"$setOnInsert": {
             "username": user.username,
             "first_name": user.first_name,
             "time": datetime.now()
-        })
+        }},
+        upsert=True
+    )
 
 
-async def is_owner(user_id: int):
+def is_owner(user_id: int):
     return user_id == OWNER_ID
+
+
+def format_uptime():
+    delta: timedelta = datetime.now() - BOT_START_TIME
+    days = delta.days
+    hours, rem = divmod(delta.seconds, 3600)
+    minutes, seconds = divmod(rem, 60)
+
+    return f"{days}d {hours}h {minutes}m {seconds}s"
 
 
 # ---------------- Forced Join Logic ----------------
@@ -242,10 +272,10 @@ async def getnumber(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await do_lookup(update, context, context.args)
 
 
-# -------- Owner Commands --------
+# -------- Owner / Utility Commands --------
 
 async def total_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_owner(update.effective_user.id):
+    if not is_owner(update.effective_user.id):
         return
 
     total = users_col.count_documents({})
@@ -253,7 +283,7 @@ async def total_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def show_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_owner(update.effective_user.id):
+    if not is_owner(update.effective_user.id):
         return
 
     logs = logs_col.find().sort("time", -1).limit(10)
@@ -266,12 +296,32 @@ async def show_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text[:4000])
 
 
+async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    start = time.time()
+    msg = await update.message.reply_text("🏓 Pinging...")
+    latency = (time.time() - start) * 1000
+
+    uptime = format_uptime()
+    cpu = LAST_CPU_SAMPLE["cpu"]
+    ram = LAST_CPU_SAMPLE["ram"]
+
+    text = (
+        "🏓 *Pong!*\n\n"
+        f"⏱ Latency: `{latency:.2f} ms`\n"
+        f"🕒 Uptime: `{uptime}`\n"
+        f"🧠 CPU: `{cpu:.1f}%`\n"
+        f"💾 RAM: `{ram:.1f}%`"
+    )
+
+    await msg.edit_text(text, parse_mode="Markdown")
+
 # ---------------- Register Handlers ----------------
 
 tg_app.add_handler(CommandHandler("start", start))
 tg_app.add_handler(CommandHandler("num", getnumber))
 tg_app.add_handler(CommandHandler("total", total_users))
 tg_app.add_handler(CommandHandler("logs", show_logs))
+tg_app.add_handler(CommandHandler("ping", ping))
 tg_app.add_handler(CallbackQueryHandler(check_join_callback, pattern="check_join"))
 
 # ---------------- Webhook ----------------
