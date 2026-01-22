@@ -254,4 +254,4 @@ async def startup():
 asyncio.run_coroutine_threadsafe(startup(), main_loop)
 
 if __name__ == "__main__":
-    flask_app.run(host="0.0.0.0", port=PORT).
+    flask_app.run(host="0.0.0.0", port=PORT)
