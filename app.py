@@ -168,15 +168,16 @@ async def lookup_one(update: Update, context: ContextTypes.DEFAULT_TYPE, mobile:
     with open(filename, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
+    # 🔥 CHANGED CAPTION HERE
     with open(filename, "rb") as f:
         file_msg = await update.message.reply_document(
             document=f,
             filename=filename,
-            caption=f"📄 Mobile lookup result for {mobile}"
+            caption="📄 Mobile lookup result for your request"
         )
 
     warn_msg = await update.message.reply_text(
-        "⚠️ Save this details.\nThis file will be deleted in 30 seconds."
+        "⚠️ Save or forward this details.\nThis file will be deleted in 30 seconds."
     )
 
     await asyncio.sleep(30)
