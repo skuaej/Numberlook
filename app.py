@@ -19,7 +19,6 @@ PORT = int(os.getenv("PORT", 8000))
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
-# ---- Forced join chats (2 channels) ----
 FORCE_CHAT_IDS = [
     int(os.getenv("CHANNEL_ID_1", "-1003559174618")),
     int(os.getenv("CHANNEL_ID_2", "-1003317410802")),
@@ -34,6 +33,10 @@ JOIN_LINKS = [
 
 flask_app = Flask(__name__)
 tg_app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+# ---- Global asyncio loop for PTB ----
+main_loop = asyncio.new_event_loop()
+asyncio.set_event_loop(main_loop)
 
 # ---------------- Forced Join Logic ----------------
 
@@ -225,21 +228,24 @@ tg_app.add_handler(
 @flask_app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
     data = request.get_json(force=True)
+    update = Update.de_json(data, tg_app.bot)
 
-    async def handle():
-        update = Update.de_json(data, tg_app.bot)
-        await tg_app.process_update(update)
+    asyncio.run_coroutine_threadsafe(
+        tg_app.process_update(update),
+        main_loop
+    )
 
-    asyncio.get_event_loop().create_task(handle())
     return "ok"
 
 # ---------------- Startup ----------------
 
-if __name__ == "__main__":
-    async def main():
-        await tg_app.initialize()
-        await tg_app.bot.set_webhook(WEBHOOK_URL)
-        print("✅ Webhook set:", WEBHOOK_URL)
+async def startup():
+    await tg_app.initialize()
+    await tg_app.start()
+    await tg_app.bot.set_webhook(WEBHOOK_URL)
+    print("✅ Webhook set:", WEBHOOK_URL)
 
-    asyncio.run(main())
+main_loop.create_task(startup())
+
+if __name__ == "__main__":
     flask_app.run(host="0.0.0.0", port=PORT)
