@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 # ---- Copy bot code ----
-COPY apa.py .
+COPY app.py .
 
 # ---- Expose port for Koyeb ----
 EXPOSE 8000
