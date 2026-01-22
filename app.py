@@ -7,7 +7,7 @@ from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ContextTypes,
-    CallbackQueryHandler, MessageHandler, filters
+    CallbackQueryHandler
 )
 
 # ---------------- CONFIG ----------------
@@ -91,8 +91,7 @@ async def check_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.message.edit_text(
             "✅ Verified!\n\n"
             "Now use:\n"
-            "/getnumber 8797879802\n"
-            "@eyelookup_bot 8797879802"
+            "/num 8797879802"
         )
     else:
         await query.answer(
@@ -113,8 +112,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Welcome!\n\n"
         "Use:\n"
-        "/num 8797879802\n"
-        "@eyelookup_bot 8797879802"
+        "/num 8797879802"
     )
 
 
@@ -168,12 +166,11 @@ async def lookup_one(update: Update, context: ContextTypes.DEFAULT_TYPE, mobile:
     with open(filename, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
-    # 🔥 CHANGED CAPTION HERE
     with open(filename, "rb") as f:
         file_msg = await update.message.reply_document(
             document=f,
             filename=filename,
-            caption="📄 this is result for your request"
+            caption="📄 This is the result for your request"
         )
 
     warn_msg = await update.message.reply_text(
@@ -206,29 +203,18 @@ async def do_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE, mobiles:
 async def getnumber(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
-            "❌ Usage:\n/getnumber 8797879802\nor\n@eyelookup 8797879802"
+            "❌ Usage:\n/num 8797879802"
         )
         return
 
     await do_lookup(update, context, context.args)
 
 
-async def mention_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    nums = update.message.text.replace("@eyelookup", "").strip().split()
-    if not nums:
-        await update.message.reply_text("❌ Usage:\n@eyelookup 8797879802")
-        return
-
-    await do_lookup(update, context, nums)
-
 # ---------------- Register Handlers ----------------
 
 tg_app.add_handler(CommandHandler("start", start))
 tg_app.add_handler(CommandHandler("num", getnumber))
 tg_app.add_handler(CallbackQueryHandler(check_join_callback, pattern="check_join"))
-tg_app.add_handler(
-    MessageHandler(filters.TEXT & filters.Regex(r"@eyelookup_bot"), mention_lookup)
-)
 
 # ---------------- Webhook ----------------
 
