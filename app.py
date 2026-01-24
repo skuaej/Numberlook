@@ -17,7 +17,7 @@ from pymongo import MongoClient
 # ---------------- CONFIG ----------------
 
 API_KEY = "jakiez"
-BASE_URL = "https://giga-seven.vercel.app/api"
+BASE_URL = "https://usesirosint.vercel.app/api/numinfo"
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
@@ -144,54 +144,6 @@ def inc_lookup():
     except:
         pass
 
-# ---------------- Background RAM Monitor ----------------
-
-def ram_sampler():
-    global HIGH_RAM_COUNT
-    while True:
-        try:
-            mem = psutil.virtual_memory()
-
-            LAST_SAMPLE["ram"] = mem.percent
-            LAST_SAMPLE["ram_used"] = mem.used // (1024 * 1024)
-            LAST_SAMPLE["ram_total"] = mem.total // (1024 * 1024)
-
-            if mem.percent > 70:
-                HIGH_RAM_COUNT += 1
-            else:
-                HIGH_RAM_COUNT = 0
-
-            if HIGH_RAM_COUNT >= 3:
-                deleted = cleanup_temp_files()
-                text = (
-                    f"🚨 High RAM Alert\n"
-                    f"RAM: {mem.percent:.1f}%\n"
-                    f"🧹 Auto-cleanup ran\n"
-                    f"Files deleted: {deleted}"
-                )
-
-                try:
-                    logs_col.insert_one({"text": text, "time": datetime.now()})
-                except:
-                    pass
-
-                try:
-                    asyncio.run_coroutine_threadsafe(
-                        tg_app.bot.send_message(LOG_CHANNEL_ID, text),
-                        main_loop
-                    )
-                except:
-                    pass
-
-                HIGH_RAM_COUNT = 0
-
-        except:
-            pass
-
-        time.sleep(5)
-
-threading.Thread(target=ram_sampler, daemon=True).start()
-
 # ---------------- Forced Join ----------------
 
 async def is_user_joined(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -251,16 +203,20 @@ async def lookup_one(update: Update, context: ContextTypes.DEFAULT_TYPE, mobile:
         return
 
     url = f"{BASE_URL}?key={API_KEY}&num={mobile}"
-    r = requests.get(url, timeout=20)
-    data = r.json()
 
-    if not data.get("success"):
-        await update.message.reply_text(f"⚠️ API Error for {mobile}")
+    try:
+        r = requests.get(url, timeout=20)
+        data = r.json()
+    except Exception as e:
+        await update.message.reply_text("⚠️ API not responding or invalid JSON.")
         return
 
-    results = data.get("result", [])
-    if not results:
-        await update.message.reply_text(f"❌ No data found for {mobile}")
+    # --- FLEXIBLE RESPONSE HANDLING ---
+    success = data.get("success", True)
+    results = data.get("result") or data.get("data") or []
+
+    if not success or not results:
+        await update.message.reply_text(f"⚠️ API Error or no data for {mobile}")
         return
 
     lines = [
@@ -303,8 +259,8 @@ async def lookup_one(update: Update, context: ContextTypes.DEFAULT_TYPE, mobile:
     try:
         await context.bot.delete_message(update.effective_chat.id, file_msg.message_id)
         await context.bot.delete_message(update.effective_chat.id, warn_msg.message_id)
-    except Exception as e:
-        print("Delete failed:", e)
+    except:
+        pass
 
     try:
         os.remove(filename)
@@ -327,95 +283,10 @@ async def getnumber(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await do_lookup(update, context, context.args)
 
-# -------- Utility Commands --------
-
-async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    start = time.time()
-    msg = await update.message.reply_text("🏓 Pinging...")
-    latency = (time.time() - start) * 1000
-
-    s = LAST_SAMPLE
-    disk_used, disk_total, disk_percent = get_disk_usage()
-
-    text = (
-        "🏓 Pong!\n\n"
-        f"⏱ Latency: {latency:.1f} ms\n"
-        f"🕒 Uptime: {format_uptime()}\n"
-        f"💾 RAM: {s['ram']:.1f}%\n"
-        f"📦 Memory: {s['ram_used']}MB / {s['ram_total']}MB\n"
-        f"💽 Storage: {disk_used}MB / {disk_total}MB ({disk_percent:.1f}%)"
-    )
-
-    await msg.edit_text(text)
-
-
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    try:
-        total_users = users_col.count_documents({})
-        today_users = users_col.count_documents({
-            "time": {"$gte": datetime.now().replace(hour=0, minute=0, second=0)}
-        })
-        s = stats_col.find_one({"date": today}) or {"lookups": 0}
-    except:
-        await update.message.reply_text("❌ Database error.")
-        return
-
-    text = (
-        "📊 Bot Stats\n\n"
-        f"👥 Total Users: {total_users}\n"
-        f"🆕 Users Today: {today_users}\n"
-        f"🔍 Lookups Today: {s.get('lookups', 0)}"
-    )
-
-    await update.message.reply_text(text)
-
-
-async def total_users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ Not authorized.")
-        return
-
-    try:
-        total = users_col.count_documents({})
-    except:
-        await update.message.reply_text("❌ Database error.")
-        return
-
-    await update.message.reply_text(f"👥 Total Users: {total}")
-
-
-async def show_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ Not authorized to use /logs.")
-        return
-
-    try:
-        logs = logs_col.find().sort("time", -1).limit(10)
-        text = "🧾 Last 10 Logs:\n\n"
-
-        for l in logs:
-            t = l["time"].strftime("%Y-%m-%d %H:%M:%S")
-            text += f"[{t}]\n{l['text']}\n\n"
-
-        if not text.strip():
-            text = "ℹ️ No logs found yet."
-
-        await update.message.reply_text(text[:4000])
-
-    except Exception as e:
-        print("LOGS ERROR:", e)
-        await update.message.reply_text("❌ Database error while fetching logs.")
-
 # ---------------- Register Handlers ----------------
 
 tg_app.add_handler(CommandHandler("start", start))
 tg_app.add_handler(CommandHandler("num", getnumber))
-tg_app.add_handler(CommandHandler("ping", ping))
-tg_app.add_handler(CommandHandler("stats", stats))
-tg_app.add_handler(CommandHandler("total", total_users_cmd))
-tg_app.add_handler(CommandHandler("logs", show_logs))
 tg_app.add_handler(CallbackQueryHandler(check_join_callback, pattern="check_join"))
 
 # ---------------- Webhook ----------------
