@@ -46,7 +46,7 @@ JOIN_LINKS = [
 ]
 
 BOT_START_TIME = datetime.now()
-LAST_SAMPLE = {"cpu": 0.0, "ram": 0.0, "ram_used": 0, "ram_total": 0}
+LAST_SAMPLE = {"ram": 0.0, "ram_used": 0, "ram_total": 0}
 HIGH_RAM_COUNT = 0
 
 # ---------------- MongoDB ----------------
@@ -82,17 +82,6 @@ def format_uptime():
     h, rem = divmod(delta.seconds, 3600)
     m, s = divmod(rem, 60)
     return f"{d}d {h}h {m}m {s}s"
-
-
-def get_disk_usage():
-    try:
-        usage = psutil.disk_usage("/")
-        used = usage.used // (1024 * 1024)
-        total = usage.total // (1024 * 1024)
-        percent = usage.percent
-        return used, total, percent
-    except:
-        return 0, 0, 0
 
 
 def cleanup_temp_files():
@@ -205,41 +194,45 @@ async def lookup_one(update: Update, context: ContextTypes.DEFAULT_TYPE, mobile:
     url = f"{BASE_URL}?key={API_KEY}&num={mobile}"
 
     try:
-        r = requests.get(url, timeout=20)
+        r = requests.get(url, timeout=25)
         data = r.json()
-    except Exception as e:
+    except:
         await update.message.reply_text("⚠️ API not responding or invalid JSON.")
         return
 
-    # --- FLEXIBLE RESPONSE HANDLING ---
-    success = data.get("success", True)
-    results = data.get("result") or data.get("data") or []
+    if not data.get("success"):
+        await update.message.reply_text(f"⚠️ API Error for {mobile}")
+        return
 
-    if not success or not results:
-        await update.message.reply_text(f"⚠️ API Error or no data for {mobile}")
+    results = data.get("result", [])
+    if not isinstance(results, list) or not results:
+        await update.message.reply_text(f"❌ No data found for {mobile}")
         return
 
     lines = [
         "📱 Mobile Lookup Result",
         f"🔍 Searched Number: {mobile}",
         f"🕒 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        "=" * 50
+        f"📊 Total Records: {len(results)}",
+        "=" * 60
     ]
 
     for i, info in enumerate(results, 1):
-        lines += [
-            f"\n📌 Record {i}",
-            f"Name        : {info.get('name','N/A')}",
-            f"Father Name: {info.get('father_name','N/A')}",
-            f"Mobile      : {info.get('mobile','N/A')}",
+        lines.extend([
+            "",
+            f"📌 Record {i}",
+            f"Mobile       : {info.get('mobile','N/A')}",
+            f"Name         : {info.get('name','N/A')}",
+            f"Father Name : {info.get('father_name','N/A')}",
             f"Alt Mobile  : {info.get('alt_mobile','N/A')}",
-            f"Circle      : {info.get('circle','N/A')}",
-            f"Email       : {info.get('email','N/A')}",
-            f"Address     : {info.get('address','N/A')}",
-            "-" * 50
-        ]
+            f"Circle       : {info.get('circle','N/A')}",
+            f"Email        : {info.get('email','N/A')}",
+            f"Address      : {info.get('address','N/A')}",
+            "-" * 60
+        ])
 
     filename = f"lookup_{mobile}.txt"
+
     with open(filename, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
@@ -247,14 +240,14 @@ async def lookup_one(update: Update, context: ContextTypes.DEFAULT_TYPE, mobile:
         file_msg = await update.message.reply_document(
             document=f,
             filename=filename,
-            caption="📄 This is the result for your request"
+            caption=f"📄 Result for {mobile}\nTotal Records: {len(results)}"
         )
 
     warn_msg = await update.message.reply_text(
-        "⚠️ Save or forward this file.\nThis message will be deleted in 60 seconds."
+        "⚠️ Save or forward this file.\nThis file will be deleted from server in 90 seconds."
     )
 
-    await asyncio.sleep(60)
+    await asyncio.sleep(90)
 
     try:
         await context.bot.delete_message(update.effective_chat.id, file_msg.message_id)
