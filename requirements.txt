@@ -5,4 +5,4 @@ requests==2.31.0
 psutil==5.9.8
 dnspython==2.6.1
 flask
-request
+
