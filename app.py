@@ -13,7 +13,6 @@ from telegram import (
     InlineKeyboardMarkup
 )
 from telegram.ext import (
-    Application,
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
@@ -31,9 +30,6 @@ WEBHOOK_PATH = "webhook"
 
 API_KEY = "jakiez"
 BASE_URL = "https://usesirosint.vercel.app/api/numinfo"
-
-OWNER_ID = 6804892450
-LOG_CHANNEL_ID = -1003453546878
 
 FORCE_CHAT_IDS = [-1003559174618, -1003317410802]
 JOIN_LINKS = [
@@ -214,7 +210,10 @@ application.add_handler(CommandHandler("ping", ping))
 application.add_handler(CommandHandler("stats", stats))
 application.add_handler(CallbackQueryHandler(check_join, pattern="check_join"))
 
-# ───────── FLASK WEBHOOK ─────────
+# 🔥 SET WEBHOOK IMMEDIATELY (FLASK 3 SAFE)
+application.bot.set_webhook(f"{APP_URL}/{WEBHOOK_PATH}")
+
+# ───────── FLASK APP ─────────
 
 flask_app = Flask(__name__)
 
@@ -227,11 +226,6 @@ async def webhook():
     update = Update.de_json(request.get_json(force=True), application.bot)
     await application.process_update(update)
     return "OK", 200
-
-@flask_app.before_first_request
-def set_webhook():
-    application.bot.set_webhook(f"{APP_URL}/{WEBHOOK_PATH}")
-    print("✅ Webhook set")
 
 # ───────── RUN ─────────
 
