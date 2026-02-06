@@ -1,11 +1,11 @@
 import os
 import asyncio
-import time
 from datetime import datetime
 
 import requests
 import psutil
 from pymongo import MongoClient
+from flask import Flask, request
 
 from telegram import (
     Update,
@@ -13,6 +13,7 @@ from telegram import (
     InlineKeyboardMarkup
 )
 from telegram.ext import (
+    Application,
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
@@ -23,9 +24,9 @@ from telegram.ext import (
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URI = os.getenv("MONGO_URI")
-PORT = int(os.getenv("PORT", 8000))
+APP_URL = os.getenv("APP_URL")  # https://numloook.herokuapp.com
+PORT = int(os.environ.get("PORT", 5000))
 
-APP_URL = "https://numloook.herokuapp.com"
 WEBHOOK_PATH = "webhook"
 
 API_KEY = "jakiez"
@@ -40,7 +41,7 @@ JOIN_LINKS = [
     "https://t.me/+HidgJvH0BktiZmI9"
 ]
 
-if not BOT_TOKEN or not MONGO_URI:
+if not BOT_TOKEN or not MONGO_URI or not APP_URL:
     raise RuntimeError("Missing ENV variables")
 
 BOT_START = datetime.now()
@@ -203,26 +204,36 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔍 Lookups Today: {s['lookups']}"
     )
 
-# ───────── MAIN ─────────
+# ───────── TELEGRAM APP ─────────
 
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("num", num))
-    app.add_handler(CommandHandler("ping", ping))
-    app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(CallbackQueryHandler(check_join, pattern="check_join"))
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("num", num))
+application.add_handler(CommandHandler("ping", ping))
+application.add_handler(CommandHandler("stats", stats))
+application.add_handler(CallbackQueryHandler(check_join, pattern="check_join"))
 
-    print("🚀 Starting webhook")
+# ───────── FLASK WEBHOOK ─────────
 
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=WEBHOOK_PATH,
-        webhook_url=f"{APP_URL}/{WEBHOOK_PATH}",
-        drop_pending_updates=True
-    )
+flask_app = Flask(__name__)
+
+@flask_app.route("/", methods=["GET"])
+def home():
+    return "Bot running", 200
+
+@flask_app.route(f"/{WEBHOOK_PATH}", methods=["POST"])
+async def webhook():
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    await application.process_update(update)
+    return "OK", 200
+
+@flask_app.before_first_request
+def set_webhook():
+    application.bot.set_webhook(f"{APP_URL}/{WEBHOOK_PATH}")
+    print("✅ Webhook set")
+
+# ───────── RUN ─────────
 
 if __name__ == "__main__":
-    main()
+    flask_app.run(host="0.0.0.0", port=PORT)
