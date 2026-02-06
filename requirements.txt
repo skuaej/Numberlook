@@ -1,5 +1,6 @@
-python-telegram-bot==20.7
-flask
-requests
-pymongo
-psutil
+
+python-telegram-bot[webhooks]==20.7
+pymongo==4.6.1
+requests==2.31.0
+psutil==5.9.8
+dnspython==2.6.1
