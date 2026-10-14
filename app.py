@@ -1,7 +1,7 @@
 import os
 import threading
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 import psutil
@@ -35,6 +35,7 @@ JOIN_LINKS = [
 ]
 
 BOT_START = datetime.now()
+COOLDOWN_SECONDS = 60   # 1 minute cooldown
 
 # ───────── DATABASE ─────────
 
@@ -42,6 +43,7 @@ mongo = MongoClient(MONGO_URI)
 db = mongo["eyelookup_bot"]
 users_col = db["users"]
 stats_col = db["stats"]
+cooldown_col = db["cooldown"]
 
 # ───────── HELPERS ─────────
 
@@ -67,6 +69,30 @@ def inc_lookup():
     stats_col.update_one(
         {"date": today},
         {"$inc": {"lookups": 1}},
+        upsert=True
+    )
+
+def is_on_cooldown(user_id: int) -> tuple[bool, int]:
+    """Returns (is_on_cooldown, remaining_seconds)"""
+    doc = cooldown_col.find_one({"user_id": user_id})
+    if not doc:
+        return False, 0
+
+    last_time = doc.get("last_search")
+    if not last_time:
+        return False, 0
+
+    elapsed = (datetime.now() - last_time).total_seconds()
+    remaining = COOLDOWN_SECONDS - elapsed
+
+    if remaining > 0:
+        return True, int(remaining)
+    return False, 0
+
+def set_cooldown(user_id: int):
+    cooldown_col.update_one(
+        {"user_id": user_id},
+        {"$set": {"last_search": datetime.now()}},
         upsert=True
     )
 
@@ -117,10 +143,22 @@ async def num(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Usage:\n/num 8797879802")
         return
 
-    if not await is_joined(update.effective_user.id, context):
+    user_id = update.effective_user.id
+
+    # Check force join
+    if not await is_joined(user_id, context):
         await update.message.reply_text(
             "🚫 Join both channels",
             reply_markup=join_keyboard()
+        )
+        return
+
+    # Check cooldown
+    on_cd, remaining = is_on_cooldown(user_id)
+    if on_cd:
+        await update.message.reply_text(
+            f"⏳ Please wait **{remaining} seconds** before next search.",
+            parse_mode="Markdown"
         )
         return
 
@@ -128,6 +166,7 @@ async def num(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await lookup(update, context, mobile)
 
 async def lookup(update, context, mobile):
+    user_id = update.effective_user.id
     inc_lookup()
 
     if not mobile.isdigit():
@@ -146,20 +185,19 @@ async def lookup(update, context, mobile):
             timeout=30
         )
         print("Status:", response.status_code)
-        print("Response Text:", response.text[:500])  # limited log
+        print("Response Text:", response.text[:600])
         r = response.json()
     except Exception as e:
         print(f"❌ API Error: {e}")
         await progress_msg.edit_text("⚠️ API error occurred.")
         return
 
-    # ───────── Improved flexible parser for current API ─────────
+    # ───────── Improved flexible parser ─────────
     results = []
 
     if isinstance(r, list):
         results = r
     elif isinstance(r, dict):
-        # Handle the real structure from your Railway API
         data = r.get("Data") or r.get("data")
         if isinstance(data, dict):
             main = data.get("Main_Records") or data.get("main_records") or []
@@ -168,16 +206,14 @@ async def lookup(update, context, mobile):
         elif isinstance(data, list):
             results = data
 
-        # Fallback for other common keys
         if not results:
             for key in ["result", "data", "records", "details", "Main_Records", "main_records"]:
                 if key in r and isinstance(r[key], list):
                     results = r[key]
                     break
 
-        # Single record object
         if not results:
-            if any(k in r for k in ('name', 'fname', 'father_name', 'circle', 'address', 'email', 'mobile', 'Number')):
+            if any(k in r for k in ('name', 'fname', 'father_name', 'circle', 'address', 'email', 'mobile', 'Number', 'id')):
                 results = [r]
             else:
                 for v in r.values():
@@ -189,6 +225,9 @@ async def lookup(update, context, mobile):
         await progress_msg.edit_text("❌ No data found.")
         return
 
+    # Set cooldown only after successful search
+    set_cooldown(user_id)
+
     lines = [f"📱 Number: {mobile}", "-" * 40]
 
     for i, x in enumerate(results, 1):
@@ -199,6 +238,7 @@ async def lookup(update, context, mobile):
             f"Alt: {x.get('alt') or x.get('alt_mobile') or 'N/A'}",
             f"Circle: {x.get('circle') or 'N/A'}",
             f"Email: {x.get('email') or 'N/A'}",
+            f"ID: {x.get('id') or 'N/A'}",
             f"Address: {x.get('address') or 'N/A'}",
         ]
 
@@ -208,9 +248,19 @@ async def lookup(update, context, mobile):
 
     await progress_msg.delete()
 
+    # Send the result file
     with open(fname, "rb") as f:
         msg = await update.message.reply_document(f)
 
+    # Send remaining cooldown text
+    await update.message.reply_text(
+        f"✅ Result sent!\n"
+        f"⏳ Next search available in **{COOLDOWN_SECONDS} seconds**.\n"
+        f"📄 File will auto-delete in 60 seconds.",
+        parse_mode="Markdown"
+    )
+
+    # Auto delete the document after 60 seconds
     await asyncio.sleep(60)
 
     try:
