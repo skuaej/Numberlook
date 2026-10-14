@@ -1,4 +1,3 @@
-
 import os
 import threading
 import asyncio
@@ -138,30 +137,36 @@ async def lookup(update, context, mobile):
     progress_msg = await update.message.reply_text(f"🔎 Searching database for `{mobile}`...", parse_mode="Markdown")
 
     try:
-        response = requests.get(f"{BASE_URL}?Number={mobile}", timeout=20)
-        print(f"📡 API Raw Response for {mobile}: {response.text}") # Prints response to Railway logs
+        response = requests.get(
+            BASE_URL,
+            params={"Number": mobile},
+            timeout=30
+        )
+        print("Status:", response.status_code)
+        print("Response Text:", response.text)
         r = response.json()
     except Exception as e:
         print(f"❌ API Error: {e}")
         await progress_msg.edit_text("⚠️ API error occurred.")
         return
 
-    # FLEXIBLE PARSER
+    # Flexible parser matching your exact standalone test script format
     results = []
     if isinstance(r, list):
         results = r
     elif isinstance(r, dict):
-        if "result" in r and isinstance(r["result"], list):
-            results = r["result"]
-        elif "data" in r and isinstance(r["data"], list):
-            results = r["data"]
-        elif any(k in r for k in ('name', 'father_name', 'circle', 'address', 'phone', 'mobile', 'email')):
-            results = [r]
-        else:
-            for v in r.values():
-                if isinstance(v, list):
-                    results = v
-                    break
+        for key in ["result", "data", "records", "details"]:
+            if key in r and isinstance(r[key], list):
+                results = r[key]
+                break
+        if not results:
+            if any(k in r for k in ('name', 'father_name', 'circle', 'address', 'email', 'mobile', 'Number')):
+                results = [r]
+            else:
+                for v in r.values():
+                    if isinstance(v, list):
+                        results = v
+                        break
 
     if not results:
         await progress_msg.edit_text("❌ No data found.")
@@ -277,9 +282,7 @@ def main():
     application.add_handler(CommandHandler("bc", broadcast))
     application.add_handler(CallbackQueryHandler(check_join, pattern="check_join"))
 
-    print("🤖 Bot is starting via polling with conflict resolution...")
-    
-    # 🔥 drop_pending_updates=True clears old/stuck sessions automatically
+    print("🤖 Bot is starting via polling...")
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
