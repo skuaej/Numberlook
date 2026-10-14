@@ -151,10 +151,11 @@ async def num(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Cooldown check
     on_cd, remaining = is_on_cooldown(user_id)
     if on_cd:
         await update.message.reply_text(
-            f"⏳ Please wait **{remaining} seconds** before next search.",
+            f"⏳ You are on cooldown!\nPlease wait **{remaining} seconds** before next search.",
             parse_mode="Markdown"
         )
         return
@@ -225,6 +226,7 @@ async def lookup(update, context, mobile):
         await progress_msg.edit_text("❌ No data found.")
         return
 
+    # Set cooldown only after successful result
     set_cooldown(user_id)
 
     lines = [f"📱 Number: {mobile}", "-" * 40]
