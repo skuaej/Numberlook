@@ -1,24 +1,15 @@
 import os
 import threading
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import requests
 import psutil
 from pymongo import MongoClient
 from flask import Flask
 
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup
-)
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # ───────── CONFIG ─────────
 
@@ -35,7 +26,6 @@ JOIN_LINKS = [
 ]
 
 BOT_START = datetime.now()
-COOLDOWN_SECONDS = 60
 
 # ───────── DATABASE ─────────
 
@@ -43,7 +33,6 @@ mongo = MongoClient(MONGO_URI)
 db = mongo["eyelookup_bot"]
 users_col = db["users"]
 stats_col = db["stats"]
-cooldown_col = db["cooldown"]
 
 # ───────── HELPERS ─────────
 
@@ -69,29 +58,6 @@ def inc_lookup():
     stats_col.update_one(
         {"date": today},
         {"$inc": {"lookups": 1}},
-        upsert=True
-    )
-
-def is_on_cooldown(user_id: int) -> tuple[bool, int]:
-    doc = cooldown_col.find_one({"user_id": user_id})
-    if not doc:
-        return False, 0
-
-    last_time = doc.get("last_search")
-    if not last_time:
-        return False, 0
-
-    elapsed = (datetime.now() - last_time).total_seconds()
-    remaining = COOLDOWN_SECONDS - elapsed
-
-    if remaining > 0:
-        return True, int(remaining)
-    return False, 0
-
-def set_cooldown(user_id: int):
-    cooldown_col.update_one(
-        {"user_id": user_id},
-        {"$set": {"last_search": datetime.now()}},
         upsert=True
     )
 
@@ -151,20 +117,10 @@ async def num(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Cooldown check
-    on_cd, remaining = is_on_cooldown(user_id)
-    if on_cd:
-        await update.message.reply_text(
-            f"⏳ You are on cooldown!\nPlease wait **{remaining} seconds** before next search.",
-            parse_mode="Markdown"
-        )
-        return
-
     for mobile in context.args:
         await lookup(update, context, mobile)
 
 async def lookup(update, context, mobile):
-    user_id = update.effective_user.id
     inc_lookup()
 
     if not mobile.isdigit():
@@ -225,9 +181,6 @@ async def lookup(update, context, mobile):
     if not results:
         await progress_msg.edit_text("❌ No data found.")
         return
-
-    # Set cooldown only after successful result
-    set_cooldown(user_id)
 
     lines = [f"📱 Number: {mobile}", "-" * 40]
 
