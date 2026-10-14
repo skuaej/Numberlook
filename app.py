@@ -133,7 +133,9 @@ async def lookup(update, context, mobile):
     )
 
     try:
-        response = requests.get(
+        # 🔥 FIX: Run blocking requests.get in a separate thread so it never hangs the bot
+        response = await asyncio.to_thread(
+            requests.get,
             BASE_URL,
             params={"Number": mobile},
             timeout=30
@@ -311,3 +313,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
