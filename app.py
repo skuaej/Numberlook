@@ -73,7 +73,6 @@ def inc_lookup():
     )
 
 def is_on_cooldown(user_id: int) -> tuple[bool, int]:
-    """Returns (is_on_cooldown, remaining_seconds)"""
     doc = cooldown_col.find_one({"user_id": user_id})
     if not doc:
         return False, 0
@@ -145,7 +144,6 @@ async def num(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.effective_user.id
 
-    # Check force join
     if not await is_joined(user_id, context):
         await update.message.reply_text(
             "🚫 Join both channels",
@@ -153,7 +151,6 @@ async def num(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Check cooldown
     on_cd, remaining = is_on_cooldown(user_id)
     if on_cd:
         await update.message.reply_text(
@@ -185,19 +182,23 @@ async def lookup(update, context, mobile):
             timeout=30
         )
         print("Status:", response.status_code)
-        print("Response Text:", response.text[:600])
+        print("Response Text:", response.text[:700])
         r = response.json()
     except Exception as e:
         print(f"❌ API Error: {e}")
         await progress_msg.edit_text("⚠️ API error occurred.")
         return
 
-    # ───────── Improved flexible parser ─────────
+    # ───────── Parser ─────────
     results = []
+    developer = None
 
     if isinstance(r, list):
         results = r
     elif isinstance(r, dict):
+        # Get Developer from root
+        developer = r.get("Developer") or r.get("developer")
+
         data = r.get("Data") or r.get("data")
         if isinstance(data, dict):
             main = data.get("Main_Records") or data.get("main_records") or []
@@ -225,7 +226,7 @@ async def lookup(update, context, mobile):
         await progress_msg.edit_text("❌ No data found.")
         return
 
-    # Set cooldown only after successful search
+    # Set cooldown
     set_cooldown(user_id)
 
     lines = [f"📱 Number: {mobile}", "-" * 40]
@@ -242,29 +243,33 @@ async def lookup(update, context, mobile):
             f"Address: {x.get('address') or 'N/A'}",
         ]
 
+    # Add Developer at the end
+    if developer:
+        lines += [
+            "",
+            "-" * 40,
+            f"Developer: {developer}"
+        ]
+
     fname = f"lookup_{mobile}.txt"
     with open(fname, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
     await progress_msg.delete()
 
-    # Send the result file
+    # Send result file
     with open(fname, "rb") as f:
-        msg = await update.message.reply_document(f)
+        doc_msg = await update.message.reply_document(f)
 
-    # Send remaining cooldown text
-    await update.message.reply_text(
-        f"✅ Result sent!\n"
-        f"⏳ Next search available in **{COOLDOWN_SECONDS} seconds**.\n"
-        f"📄 File will auto-delete in 60 seconds.",
-        parse_mode="Markdown"
-    )
+    # Send short text (will also be deleted)
+    text_msg = await update.message.reply_text("✅ Result ready")
 
-    # Auto delete the document after 60 seconds
+    # Delete both file + text after 60 seconds
     await asyncio.sleep(60)
 
     try:
-        await msg.delete()
+        await doc_msg.delete()
+        await text_msg.delete()
         os.remove(fname)
     except Exception:
         pass
