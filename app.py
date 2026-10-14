@@ -89,6 +89,18 @@ async def check_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await q.answer("❌ Join both channels first", show_alert=True)
 
+# ───────── BACKGROUND DELETE ─────────
+
+async def delete_later(doc_msg, text_msg, fname):
+    await asyncio.sleep(60)
+    try:
+        await doc_msg.delete()
+        await text_msg.delete()
+        if os.path.exists(fname):
+            os.remove(fname)
+    except Exception:
+        pass
+
 # ───────── COMMANDS ─────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -133,9 +145,7 @@ async def lookup(update, context, mobile):
     )
 
     try:
-        # 🔥 FIX: Run blocking requests.get in a separate thread so it never hangs the bot
-        response = await asyncio.to_thread(
-            requests.get,
+        response = requests.get(
             BASE_URL,
             params={"Number": mobile},
             timeout=30
@@ -218,15 +228,8 @@ async def lookup(update, context, mobile):
     # Send short text
     text_msg = await update.message.reply_text("✅ Result ready")
 
-    # Delete both after 1 minute
-    await asyncio.sleep(60)
-
-    try:
-        await doc_msg.delete()
-        await text_msg.delete()
-        os.remove(fname)
-    except Exception:
-        pass
+    # Delete in background (non-blocking)
+    asyncio.create_task(delete_later(doc_msg, text_msg, fname))
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mem = psutil.virtual_memory()
@@ -313,4 +316,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
