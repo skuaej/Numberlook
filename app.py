@@ -1,10 +1,12 @@
 import os
+import threading
 import asyncio
 from datetime import datetime
 
 import requests
 import psutil
 from pymongo import MongoClient
+from flask import Flask
 
 from telegram import (
     Update,
@@ -26,10 +28,10 @@ OWNER_ID = 6804892450
 
 BASE_URL = "https://number-look-production.up.railway.app/FetchData"
 
-FORCE_CHAT_IDS = [-1004336367021, -1004351097681]
+FORCE_CHAT_IDS = [-1004351097681, -1003732085864]
 JOIN_LINKS = [
     "https://t.me/+dOIP895nySo3NmZl",
-    "https://t.me/+dOIP895nySo3NmZl"
+    "https://t.me/+qwSbF4jNEMIwZDE1"
 ]
 
 BOT_START = datetime.now()
@@ -76,7 +78,8 @@ async def is_joined(user_id, context):
             m = await context.bot.get_chat_member(chat_id, user_id)
             if m.status in ("left", "kicked"):
                 return False
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ Membership check failed for chat {chat_id}: {e}")
             return False
     return True
 
@@ -222,9 +225,27 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await status_msg.edit_text(f"✅ Broadcast Complete!\nSuccessful: {success}\nFailed: {failed}")
 
+# ───────── KEEP-ALIVE SERVER ─────────
+
+flask_app = Flask(__name__)
+
+@flask_app.route("/", methods=["GET"])
+def home():
+    return "Bot is running", 200
+
+def run_flask():
+    port = int(os.environ.get("PORT", 5000))
+    flask_app.run(host="0.0.0.0", port=port)
+
 # ───────── MAIN APP ─────────
 
 def main():
+    # Start Flask in a background thread to satisfy hosting health checks and port binding
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+
+    # Start Telegram Bot Polling
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -234,7 +255,7 @@ def main():
     application.add_handler(CommandHandler("bc", broadcast))
     application.add_handler(CallbackQueryHandler(check_join, pattern="check_join"))
 
-    print("🤖 Bot is starting via polling...")
+    print("🤖 Bot is starting via polling with background keep-alive server...")
     application.run_polling()
 
 if __name__ == "__main__":
