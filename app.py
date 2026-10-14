@@ -134,7 +134,10 @@ async def lookup(update, context, mobile):
         await update.message.reply_text(f"❌ Invalid number: {mobile}")
         return
 
-    progress_msg = await update.message.reply_text(f"🔎 Searching database for `{mobile}`...", parse_mode="Markdown")
+    progress_msg = await update.message.reply_text(
+        f"🔎 Searching database for `{mobile}`...",
+        parse_mode="Markdown"
+    )
 
     try:
         response = requests.get(
@@ -143,28 +146,42 @@ async def lookup(update, context, mobile):
             timeout=30
         )
         print("Status:", response.status_code)
-        print("Response Text:", response.text)
+        print("Response Text:", response.text[:500])  # limited log
         r = response.json()
     except Exception as e:
         print(f"❌ API Error: {e}")
         await progress_msg.edit_text("⚠️ API error occurred.")
         return
 
-    # Flexible parser matching your exact standalone test script format
+    # ───────── Improved flexible parser for current API ─────────
     results = []
+
     if isinstance(r, list):
         results = r
     elif isinstance(r, dict):
-        for key in ["result", "data", "records", "details"]:
-            if key in r and isinstance(r[key], list):
-                results = r[key]
-                break
+        # Handle the real structure from your Railway API
+        data = r.get("Data") or r.get("data")
+        if isinstance(data, dict):
+            main = data.get("Main_Records") or data.get("main_records") or []
+            alt  = data.get("Alt_Records")  or data.get("alt_records")  or []
+            results = main + alt
+        elif isinstance(data, list):
+            results = data
+
+        # Fallback for other common keys
         if not results:
-            if any(k in r for k in ('name', 'father_name', 'circle', 'address', 'email', 'mobile', 'Number')):
+            for key in ["result", "data", "records", "details", "Main_Records", "main_records"]:
+                if key in r and isinstance(r[key], list):
+                    results = r[key]
+                    break
+
+        # Single record object
+        if not results:
+            if any(k in r for k in ('name', 'fname', 'father_name', 'circle', 'address', 'email', 'mobile', 'Number')):
                 results = [r]
             else:
                 for v in r.values():
-                    if isinstance(v, list):
+                    if isinstance(v, list) and v:
                         results = v
                         break
 
@@ -177,12 +194,12 @@ async def lookup(update, context, mobile):
     for i, x in enumerate(results, 1):
         lines += [
             f"\n📌 Record {i}",
-            f"Name: {x.get('name','N/A')}",
-            f"Father: {x.get('father_name','N/A')}",
-            f"Alt: {x.get('alt_mobile','N/A')}",
-            f"Circle: {x.get('circle','N/A')}",
-            f"Email: {x.get('email','N/A')}",
-            f"Address: {x.get('address','N/A')}",
+            f"Name: {x.get('name') or 'N/A'}",
+            f"Father: {x.get('fname') or x.get('father_name') or 'N/A'}",
+            f"Alt: {x.get('alt') or x.get('alt_mobile') or 'N/A'}",
+            f"Circle: {x.get('circle') or 'N/A'}",
+            f"Email: {x.get('email') or 'N/A'}",
+            f"Address: {x.get('address') or 'N/A'}",
         ]
 
     fname = f"lookup_{mobile}.txt"
@@ -287,4 +304,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
