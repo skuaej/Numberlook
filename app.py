@@ -37,9 +37,6 @@ JOIN_LINKS = [
     "https://t.me/+dOIP895nySo3NmZl"
 ]
 
-if not BOT_TOKEN or not MONGO_URI:
-    raise RuntimeError("Missing required configuration variables")
-
 BOT_START = datetime.now()
 
 # ───────── DATABASE ─────────
@@ -84,7 +81,7 @@ async def is_joined(user_id, context):
             m = await context.bot.get_chat_member(chat_id, user_id)
             if m.status in ("left", "kicked"):
                 return False
-        except:
+        except Exception:
             return False
     return True
 
@@ -140,10 +137,7 @@ async def lookup(update, context, mobile):
         return
 
     try:
-        r = requests.get(
-            f"{BASE_URL}?Number={mobile}",
-            timeout=20
-        ).json()
+        r = requests.get(f"{BASE_URL}?Number={mobile}", timeout=20).json()
     except Exception:
         await update.message.reply_text("⚠️ API error")
         return
@@ -178,7 +172,7 @@ async def lookup(update, context, mobile):
     try:
         await msg.delete()
         os.remove(fname)
-    except:
+    except Exception:
         pass
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -191,7 +185,7 @@ async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ This command is restricted to the bot owner.")
+        await update.message.reply_text("❌ Owner access required.")
         return
 
     today = datetime.now().strftime("%Y-%m-%d")
@@ -206,12 +200,12 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ This command is restricted to the bot owner.")
+        await update.message.reply_text("❌ Owner access required.")
         return
 
     message_to_broadcast = update.message.reply_to_message
     if not message_to_broadcast and not context.args:
-        await update.message.reply_text("❌ Reply to a message or provide text to broadcast.\nUsage: /bc <text> or reply to a message with /bc")
+        await update.message.reply_text("❌ Reply to a message or provide text: /bc <text>")
         return
 
     text = " ".join(context.args) if context.args else None
@@ -231,9 +225,9 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             failed += 1
 
-    await status_msg.edit_text(f"✅ Broadcast Complete!\n\nSuccessful: {success}\nFailed: {failed}")
+    await status_msg.edit_text(f"✅ Broadcast Complete!\nSuccessful: {success}\nFailed: {failed}")
 
-# ───────── TELEGRAM APP ─────────
+# ───────── INITIALIZATION ─────────
 
 application = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -244,8 +238,14 @@ application.add_handler(CommandHandler("stats", stats))
 application.add_handler(CommandHandler("bc", broadcast))
 application.add_handler(CallbackQueryHandler(check_join, pattern="check_join"))
 
-# 🔥 SET WEBHOOK IMMEDIATELY (FLASK 3 SAFE)
-application.bot.set_webhook(f"{APP_URL}/{WEBHOOK_PATH}")
+async def setup_app():
+    await application.initialize()
+    await application.start()
+    webhook_url = f"{APP_URL}/{WEBHOOK_PATH}"
+    await application.bot.set_webhook(url=webhook_url)
+
+# Execute initialization loop once at startup
+asyncio.run(setup_app())
 
 # ───────── FLASK APP ─────────
 
@@ -256,13 +256,18 @@ def home():
     return "Bot running", 200
 
 @flask_app.route(f"/{WEBHOOK_PATH}", methods=["POST"])
-async def webhook():
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    await application.process_update(update)
-    return "OK", 200
+def webhook():
+    if request.method == "POST":
+        data = request.get_json(force=True)
+        update = Update.de_json(data, application.bot)
+        
+        # Safely execute update handling inside event loop
+        asyncio.run(application.process_update(update))
+        return "OK", 200
+    return "Method Not Allowed", 405
 
 # ───────── RUN ─────────
 
 if __name__ == "__main__":
     flask_app.run(host="0.0.0.0", port=PORT)
-  
+    
