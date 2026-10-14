@@ -1,3 +1,4 @@
+
 import os
 import threading
 import asyncio
@@ -134,14 +135,14 @@ async def lookup(update, context, mobile):
         await update.message.reply_text(f"❌ Invalid number: {mobile}")
         return
 
-    # 🔎 Progress Indicator
     progress_msg = await update.message.reply_text(f"🔎 Searching database for `{mobile}`...", parse_mode="Markdown")
 
     try:
         response = requests.get(f"{BASE_URL}?Number={mobile}", timeout=20)
+        print(f"📡 API Raw Response for {mobile}: {response.text}") # Prints response to Railway logs
         r = response.json()
     except Exception as e:
-        print(f"API Error: {e}")
+        print(f"❌ API Error: {e}")
         await progress_msg.edit_text("⚠️ API error occurred.")
         return
 
@@ -263,19 +264,11 @@ def run_flask():
 # ───────── MAIN APP ─────────
 
 def main():
-    # Start Flask keep-alive server in background
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
 
     application = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    # 🔥 FIX: Explicitly drop any lingering webhooks to resolve the conflict error
-    async def clear_webhook():
-        await application.bot.delete_webhook(drop_pending_updates=True)
-
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(clear_webhook())
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("num", num))
@@ -285,7 +278,9 @@ def main():
     application.add_handler(CallbackQueryHandler(check_join, pattern="check_join"))
 
     print("🤖 Bot is starting via polling with conflict resolution...")
-    application.run_polling()
+    
+    # 🔥 drop_pending_updates=True clears old/stuck sessions automatically
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
