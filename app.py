@@ -5,7 +5,6 @@ from datetime import datetime
 import requests
 import psutil
 from pymongo import MongoClient
-from flask import Flask, request
 
 from telegram import (
     Update,
@@ -23,11 +22,7 @@ from telegram.ext import (
 
 BOT_TOKEN = "8955302399:AAG-sGnndn9ry7NggOemqdgt8YOOUxAiP7U"
 MONGO_URI = "mongodb+srv://usaomega1_db_user:Masdt2qYlJfXs20N@cluster0.zpedlcp.mongodb.net/?appName=Cluster0"
-APP_URL = os.getenv("APP_URL", "https://number-look-production.up.railway.app")
-PORT = int(os.environ.get("PORT", 5000))
-
 OWNER_ID = 6804892450
-WEBHOOK_PATH = "webhook"
 
 BASE_URL = "https://number-look-production.up.railway.app/FetchData"
 
@@ -227,47 +222,21 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await status_msg.edit_text(f"✅ Broadcast Complete!\nSuccessful: {success}\nFailed: {failed}")
 
-# ───────── INITIALIZATION ─────────
+# ───────── MAIN APP ─────────
 
-application = ApplicationBuilder().token(BOT_TOKEN).build()
+def main():
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("num", num))
-application.add_handler(CommandHandler("ping", ping))
-application.add_handler(CommandHandler("stats", stats))
-application.add_handler(CommandHandler("bc", broadcast))
-application.add_handler(CallbackQueryHandler(check_join, pattern="check_join"))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("num", num))
+    application.add_handler(CommandHandler("ping", ping))
+    application.add_handler(CommandHandler("stats", stats))
+    application.add_handler(CommandHandler("bc", broadcast))
+    application.add_handler(CallbackQueryHandler(check_join, pattern="check_join"))
 
-async def setup_app():
-    await application.initialize()
-    await application.start()
-    webhook_url = f"{APP_URL}/{WEBHOOK_PATH}"
-    await application.bot.set_webhook(url=webhook_url)
-
-# Execute initialization loop once at startup
-asyncio.run(setup_app())
-
-# ───────── FLASK APP ─────────
-
-flask_app = Flask(__name__)
-
-@flask_app.route("/", methods=["GET"])
-def home():
-    return "Bot running", 200
-
-@flask_app.route(f"/{WEBHOOK_PATH}", methods=["POST"])
-def webhook():
-    if request.method == "POST":
-        data = request.get_json(force=True)
-        update = Update.de_json(data, application.bot)
-        
-        # Safely execute update handling inside event loop
-        asyncio.run(application.process_update(update))
-        return "OK", 200
-    return "Method Not Allowed", 405
-
-# ───────── RUN ─────────
+    print("🤖 Bot is starting via polling...")
+    application.run_polling()
 
 if __name__ == "__main__":
-    flask_app.run(host="0.0.0.0", port=PORT)
+    main()
     
