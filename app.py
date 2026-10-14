@@ -134,15 +134,18 @@ async def lookup(update, context, mobile):
         await update.message.reply_text(f"❌ Invalid number: {mobile}")
         return
 
+    # 🔎 Progress Indicator
+    progress_msg = await update.message.reply_text(f"🔎 Searching database for `{mobile}`...", parse_mode="Markdown")
+
     try:
         response = requests.get(f"{BASE_URL}?Number={mobile}", timeout=20)
         r = response.json()
     except Exception as e:
         print(f"API Error: {e}")
-        await update.message.reply_text("⚠️ API error")
+        await progress_msg.edit_text("⚠️ API error occurred.")
         return
 
-    # 🔍 FLEXIBLE PARSER: Handles lists, dictionaries, and nested structures automatically
+    # FLEXIBLE PARSER
     results = []
     if isinstance(r, list):
         results = r
@@ -152,16 +155,15 @@ async def lookup(update, context, mobile):
         elif "data" in r and isinstance(r["data"], list):
             results = r["data"]
         elif any(k in r for k in ('name', 'father_name', 'circle', 'address', 'phone', 'mobile', 'email')):
-            results = [r]  # Single record dictionary
+            results = [r]
         else:
-            # Search inside dictionary values for any list
             for v in r.values():
                 if isinstance(v, list):
                     results = v
                     break
 
     if not results:
-        await update.message.reply_text("❌ No data found")
+        await progress_msg.edit_text("❌ No data found.")
         return
 
     lines = [f"📱 Number: {mobile}", "-" * 40]
@@ -180,6 +182,8 @@ async def lookup(update, context, mobile):
     fname = f"lookup_{mobile}.txt"
     with open(fname, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
+
+    await progress_msg.delete()
 
     with open(fname, "rb") as f:
         msg = await update.message.reply_document(f)
@@ -259,11 +263,19 @@ def run_flask():
 # ───────── MAIN APP ─────────
 
 def main():
+    # Start Flask keep-alive server in background
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
 
     application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # 🔥 FIX: Explicitly drop any lingering webhooks to resolve the conflict error
+    async def clear_webhook():
+        await application.bot.delete_webhook(drop_pending_updates=True)
+
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(clear_webhook())
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("num", num))
@@ -272,7 +284,7 @@ def main():
     application.add_handler(CommandHandler("bc", broadcast))
     application.add_handler(CallbackQueryHandler(check_join, pattern="check_join"))
 
-    print("🤖 Bot is starting via polling with background keep-alive server...")
+    print("🤖 Bot is starting via polling with conflict resolution...")
     application.run_polling()
 
 if __name__ == "__main__":
