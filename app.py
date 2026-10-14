@@ -135,12 +135,31 @@ async def lookup(update, context, mobile):
         return
 
     try:
-        r = requests.get(f"{BASE_URL}?Number={mobile}", timeout=20).json()
-    except Exception:
+        response = requests.get(f"{BASE_URL}?Number={mobile}", timeout=20)
+        r = response.json()
+    except Exception as e:
+        print(f"API Error: {e}")
         await update.message.reply_text("⚠️ API error")
         return
 
-    results = r.get("result", r.get("data", []))
+    # 🔍 FLEXIBLE PARSER: Handles lists, dictionaries, and nested structures automatically
+    results = []
+    if isinstance(r, list):
+        results = r
+    elif isinstance(r, dict):
+        if "result" in r and isinstance(r["result"], list):
+            results = r["result"]
+        elif "data" in r and isinstance(r["data"], list):
+            results = r["data"]
+        elif any(k in r for k in ('name', 'father_name', 'circle', 'address', 'phone', 'mobile', 'email')):
+            results = [r]  # Single record dictionary
+        else:
+            # Search inside dictionary values for any list
+            for v in r.values():
+                if isinstance(v, list):
+                    results = v
+                    break
+
     if not results:
         await update.message.reply_text("❌ No data found")
         return
@@ -240,12 +259,10 @@ def run_flask():
 # ───────── MAIN APP ─────────
 
 def main():
-    # Start Flask in a background thread to satisfy hosting health checks and port binding
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
 
-    # Start Telegram Bot Polling
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
