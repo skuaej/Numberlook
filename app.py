@@ -35,7 +35,7 @@ JOIN_LINKS = [
 ]
 
 BOT_START = datetime.now()
-COOLDOWN_SECONDS = 60   # 1 minute cooldown
+COOLDOWN_SECONDS = 60
 
 # ───────── DATABASE ─────────
 
@@ -196,7 +196,6 @@ async def lookup(update, context, mobile):
     if isinstance(r, list):
         results = r
     elif isinstance(r, dict):
-        # Get Developer from root
         developer = r.get("Developer") or r.get("developer")
 
         data = r.get("Data") or r.get("data")
@@ -226,7 +225,6 @@ async def lookup(update, context, mobile):
         await progress_msg.edit_text("❌ No data found.")
         return
 
-    # Set cooldown
     set_cooldown(user_id)
 
     lines = [f"📱 Number: {mobile}", "-" * 40]
@@ -243,7 +241,6 @@ async def lookup(update, context, mobile):
             f"Address: {x.get('address') or 'N/A'}",
         ]
 
-    # Add Developer at the end
     if developer:
         lines += [
             "",
@@ -261,10 +258,10 @@ async def lookup(update, context, mobile):
     with open(fname, "rb") as f:
         doc_msg = await update.message.reply_document(f)
 
-    # Send short text (will also be deleted)
+    # Send short text
     text_msg = await update.message.reply_text("✅ Result ready")
 
-    # Delete both file + text after 60 seconds
+    # Delete both after 1 minute
     await asyncio.sleep(60)
 
     try:
